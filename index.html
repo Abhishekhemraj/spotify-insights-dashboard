@@ -234,6 +234,16 @@
   .trigger-status{
     font-family:'JetBrains Mono',monospace; font-size:12px; color: var(--text-faint);
   }
+  .check-btn{
+    background: transparent; border:1px solid var(--line); color: var(--text-dim);
+    font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; padding:10px 16px; border-radius:8px; cursor:pointer;
+  }
+  .check-btn:hover{ border-color: var(--green); color: var(--green); }
+  .check-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+  .trigger-hint{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color: var(--text-faint); opacity:0.75;
+    margin-top:6px; margin-bottom: 14px; line-height:1.5;
+  }
 </style>
 </head>
 <body>
@@ -281,17 +291,6 @@
 
     <div class="stat-row" id="statRow"></div>
 
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-title">Sentiment breakdown <small id="sentTotal"></small></div>
-        <div class="bar-list" id="sentimentBars"></div>
-      </div>
-      <div class="card">
-        <div class="card-title">Severity of friction <small id="sevTotal"></small></div>
-        <div class="bar-list" id="severityBars"></div>
-      </div>
-    </div>
-
     <div class="card">
       <div class="card-title">
         Findings by research question
@@ -299,6 +298,7 @@
       </div>
       <div class="trigger-row">
         <button id="triggerAnalysisBtn" class="trigger-btn">▶ execute n8n workflow</button>
+        <button id="checkUpdatesBtn" class="check-btn">↻ check for updates</button>
         <div class="trigger-steps" id="triggerSteps">
           <span class="step" data-step="scrape">01 · scraping (apify)</span>
           <span class="step" data-step="filter">02 · filtering &amp; dedup</span>
@@ -307,6 +307,7 @@
         </div>
       </div>
       <div class="trigger-status" id="triggerStatus"></div>
+      <div class="trigger-hint" id="triggerHint">Typically takes 1\u20135 minutes, up to 10 in busier runs. This page checks automatically \u2014 or click \u201ccheck for updates\u201d anytime.</div>
       <div class="q-tabs" id="qTabs"></div>
       <!-- qHeading and qTopPatterns get inserted here by JS -->
       <button class="detail-toggle" id="detailToggle" onclick="toggleDetail()">▸ show all findings (table view)</button>
@@ -324,6 +325,11 @@
           <tbody id="insightRows"></tbody>
         </table>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Sentiment breakdown <small id="sentTotal"></small></div>
+      <div class="bar-list" id="sentimentBars"></div>
     </div>
 
   </div>
@@ -405,7 +411,6 @@ function render(rows){
   `;
 
   document.getElementById('sentTotal').textContent = `n = ${relevantCount}`;
-  document.getElementById('sevTotal').textContent = `n = ${relevantCount}`;
 
   const sentimentBars = document.getElementById('sentimentBars');
   const maxSent = Math.max(1, ...Object.values(sentCounts));
@@ -413,17 +418,6 @@ function render(rows){
     <div class="bar-row">
       <div class="label">${k}</div>
       <div class="bar-track"><div class="bar-fill ${k}" style="width:${(v/maxSent*100).toFixed(0)}%"></div></div>
-      <div class="count">${v}</div>
-    </div>
-  `).join('');
-
-  const severityBars = document.getElementById('severityBars');
-  const maxSev = Math.max(1, ...Object.values(sevCounts));
-  const sevColor = {low:'neutral', medium:'mixed', high:'negative'};
-  severityBars.innerHTML = Object.entries(sevCounts).map(([k,v]) => `
-    <div class="bar-row">
-      <div class="label">${k}</div>
-      <div class="bar-track"><div class="bar-fill ${sevColor[k]}" style="width:${(v/maxSev*100).toFixed(0)}%"></div></div>
       <div class="count">${v}</div>
     </div>
   `).join('');
@@ -609,14 +603,14 @@ document.getElementById('triggerAnalysisBtn').addEventListener('click', async fu
 
   // Staged progress: approximated timing based on observed run durations (~30-70s total)
   doneStep('scrape'); markStep('filter');
-  status.textContent = 'workflow running — this page will update automatically';
+  status.textContent = 'workflow running \u2014 this can take up to 10 minutes; the page updates automatically';
 
   setTimeout(() => { doneStep('filter'); markStep('analyze'); }, 8000);
   setTimeout(() => { doneStep('analyze'); markStep('update'); }, 22000);
 
-  // Poll the sheet for new rows, up to ~3 minutes
+  // Poll the sheet for new rows, up to ~10 minutes
   let attempts = 0;
-  const maxAttempts = 36; // 36 * 5s = 3 min
+  const maxAttempts = 120; // 120 * 5s = 10 min
   const poll = setInterval(async () => {
     attempts++;
     try {
@@ -624,7 +618,7 @@ document.getElementById('triggerAnalysisBtn').addEventListener('click', async fu
       if (initialRowCount !== null && count > initialRowCount) {
         clearInterval(poll);
         doneStep('update');
-        status.textContent = `done — ${count - initialRowCount} new item(s) added, refreshing view...`;
+        status.textContent = `done \u2014 ${count - initialRowCount} new item(s) added, refreshing view...`;
         status.style.color = 'var(--green)';
         Papa.parse(CSV_URL, {
           download: true, header: true, skipEmptyLines: true,
@@ -636,12 +630,43 @@ document.getElementById('triggerAnalysisBtn').addEventListener('click', async fu
 
     if (attempts >= maxAttempts) {
       clearInterval(poll);
-      status.textContent = 'still running — check back and refresh in a bit';
+      status.textContent = 'no update after 10 minutes \u2014 click "check for updates" to check again, or this run may have found nothing new';
       status.style.color = 'var(--text-faint)';
       btn.disabled = false;
       resetSteps();
     }
   }, 5000);
+});
+
+document.getElementById('checkUpdatesBtn').addEventListener('click', async function() {
+  const btn = this;
+  const status = document.getElementById('triggerStatus');
+  btn.disabled = true;
+  const prevText = status.textContent;
+  status.textContent = 'checking for updates...';
+  status.style.color = 'var(--text-faint)';
+  try {
+    const beforeCount = initialRowCount;
+    const count = await getSheetRowCount();
+    Papa.parse(CSV_URL, {
+      download: true, header: true, skipEmptyLines: true,
+      complete: r => {
+        render(r.data);
+        if (beforeCount !== null && count > beforeCount) {
+          status.textContent = `updated \u2014 ${count - beforeCount} new item(s) found`;
+          status.style.color = 'var(--green)';
+        } else {
+          status.textContent = 'no new items yet \u2014 try again in a bit';
+          status.style.color = 'var(--text-faint)';
+        }
+        btn.disabled = false;
+      }
+    });
+  } catch (e) {
+    status.textContent = 'could not check right now, try again';
+    status.style.color = '#e05d5d';
+    btn.disabled = false;
+  }
 });
 </script>
 </body>
