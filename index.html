@@ -307,7 +307,7 @@
         </div>
       </div>
       <div class="trigger-status" id="triggerStatus"></div>
-      <div class="trigger-hint" id="triggerHint">Typically takes 1\u20135 minutes, up to 10 in busier runs. This page checks automatically \u2014 or click \u201ccheck for updates\u201d anytime.</div>
+      <div class="trigger-hint" id="triggerHint">Typically takes 1–5 minutes, up to 10 in busier runs. This page checks automatically — or click “check for updates” anytime.</div>
       <div class="q-tabs" id="qTabs"></div>
       <!-- qHeading and qTopPatterns get inserted here by JS -->
       <button class="detail-toggle" id="detailToggle" onclick="toggleDetail()">▸ show all findings (table view)</button>
@@ -358,12 +358,19 @@ function esc(str){
   return (str||'').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
-Papa.parse(CSV_URL, {
+let lastKnownRowCount = null;
+
+function countNonEmptyRows(data){
+  return data.filter(row => Object.values(row).some(v => v && v.toString().trim().length)).length;
+}
+
+Papa.parse(CSV_URL + '&_=' + Date.now(), {
   download: true,
   header: true,
   skipEmptyLines: true,
   complete: function(results) {
     try {
+      lastKnownRowCount = countNonEmptyRows(results.data);
       render(results.data);
     } catch(e) {
       showError("Sheet loaded, but the data shape didn't match what this dashboard expects. " + e.message);
@@ -540,7 +547,6 @@ function renderQuestion(field, pool){
   document.getElementById('insightRows').innerHTML = rowsHtml || `<tr><td colspan="5" style="color:var(--text-faint)">No findings yet for this question.</td></tr>`;
 }
 
-let initialRowCount = null;
 
 function markStep(name){
   document.querySelectorAll('#triggerSteps .step').forEach(el => {
@@ -574,9 +580,7 @@ document.getElementById('triggerAnalysisBtn').addEventListener('click', async fu
   status.textContent = '';
   status.style.color = 'var(--text-faint)';
 
-  try {
-    initialRowCount = await getSheetRowCount();
-  } catch(e) { initialRowCount = null; }
+  const startCount = lastKnownRowCount;
 
   markStep('scrape');
   status.textContent = 'sending trigger...';
@@ -615,14 +619,14 @@ document.getElementById('triggerAnalysisBtn').addEventListener('click', async fu
     attempts++;
     try {
       const count = await getSheetRowCount();
-      if (initialRowCount !== null && count > initialRowCount) {
+      if (startCount !== null && count > startCount) {
         clearInterval(poll);
         doneStep('update');
-        status.textContent = `done \u2014 ${count - initialRowCount} new item(s) added, refreshing view...`;
+        status.textContent = `done \u2014 ${count - startCount} new item(s) added, refreshing view...`;
         status.style.color = 'var(--green)';
-        Papa.parse(CSV_URL, {
+        Papa.parse(CSV_URL + '&_=' + Date.now(), {
           download: true, header: true, skipEmptyLines: true,
-          complete: r => { render(r.data); btn.disabled = false; resetSteps(); }
+          complete: r => { lastKnownRowCount = countNonEmptyRows(r.data); render(r.data); btn.disabled = false; resetSteps(); }
         });
         return;
       }
@@ -642,15 +646,15 @@ document.getElementById('checkUpdatesBtn').addEventListener('click', async funct
   const btn = this;
   const status = document.getElementById('triggerStatus');
   btn.disabled = true;
-  const prevText = status.textContent;
   status.textContent = 'checking for updates...';
   status.style.color = 'var(--text-faint)';
   try {
-    const beforeCount = initialRowCount;
-    const count = await getSheetRowCount();
-    Papa.parse(CSV_URL, {
+    const beforeCount = lastKnownRowCount;
+    Papa.parse(CSV_URL + '&_=' + Date.now(), {
       download: true, header: true, skipEmptyLines: true,
       complete: r => {
+        const count = countNonEmptyRows(r.data);
+        lastKnownRowCount = count;
         render(r.data);
         if (beforeCount !== null && count > beforeCount) {
           status.textContent = `updated \u2014 ${count - beforeCount} new item(s) found`;
@@ -659,6 +663,11 @@ document.getElementById('checkUpdatesBtn').addEventListener('click', async funct
           status.textContent = 'no new items yet \u2014 try again in a bit';
           status.style.color = 'var(--text-faint)';
         }
+        btn.disabled = false;
+      },
+      error: () => {
+        status.textContent = 'could not check right now, try again';
+        status.style.color = '#e05d5d';
         btn.disabled = false;
       }
     });
